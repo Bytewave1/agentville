@@ -9,7 +9,7 @@ def test_spawn_places_agents_on_distinct_free_tiles():
 
 
 def test_agents_stay_inside_the_world_and_never_overlap():
-    world = World.with_dummies(count=5, seed=7, width=6, height=6)
+    world = World.with_dummies(count=5, seed=7, width=6, height=6, generate_terrain=False)
     for _ in range(200):
         world.step()
         positions = [(a.x, a.y) for a in world.agents]
@@ -50,3 +50,35 @@ def test_observation_lists_nearby_agents():
     assert world.observe(a).nearby == ["B"]
     b.x, b.y = 9, 9
     assert world.observe(a).nearby == []
+
+
+def test_agents_only_walk_on_walkable_tiles():
+    from agentville import terrain
+
+    world = World.with_dummies(count=12, seed=3)
+    for _ in range(150):
+        world.step()
+        for agent in world.agents:
+            assert world.tile_at(agent.x, agent.y) in terrain.WALKABLE
+
+
+def test_water_and_trees_block_movement():
+    from agentville import terrain
+
+    world = World(width=3, height=1, seed=0, tiles=[terrain.GRASS + terrain.WATER + terrain.FOREST])
+    agent = world.spawn("A")
+    assert (agent.x, agent.y) == (0, 0)
+    assert world.observe(agent).open == ()
+    world.apply(agent, "east")
+    assert (agent.x, agent.y) == (0, 0)
+    assert "blocked" in world.events[-1].text
+
+
+def test_observation_open_directions_skip_blocked_tiles():
+    from agentville import terrain
+
+    tiles = [terrain.GRASS * 3, terrain.GRASS + terrain.GRASS + terrain.WATER, terrain.GRASS * 3]
+    world = World(width=3, height=3, seed=0, tiles=tiles)
+    agent = world.spawn("A")
+    agent.x, agent.y = 1, 1
+    assert set(world.observe(agent).open) == {"north", "south", "west"}
