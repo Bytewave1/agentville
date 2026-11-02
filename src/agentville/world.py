@@ -120,6 +120,19 @@ class World:
     def log(self, agent: Agent, text: str) -> None:
         self.events.append(Event(tick=self.tick, agent=agent.name, text=text))
 
+    def snapshot(self, max_events: int = 30) -> dict:
+        """The world as plain data, ready to be sent to a browser as JSON."""
+        return {
+            "tick": self.tick,
+            "width": self.width,
+            "height": self.height,
+            "agents": [{"name": a.name, "x": a.x, "y": a.y} for a in self.agents],
+            "events": [
+                {"tick": e.tick, "agent": e.agent, "text": e.text}
+                for e in self.events[-max_events:]
+            ],
+        }
+
     # -- display -----------------------------------------------------------
 
     def render(self) -> str:

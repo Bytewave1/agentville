@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentville</title>
+<style>
+  :root {
+    --bg: #14161c;
+    --panel: #1c1f27;
+    --line: #2b2f3a;
+    --text: #e8eaf0;
+    --muted: #8b91a1;
+    --accent: #7ee2a8;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #eef0f4; --panel: #ffffff; --line: #d9dce4; --text: #1b1e27; --muted: #667085; --accent: #1f9d63; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  h1 { margin: 0; font-size: 18px; letter-spacing: .02em; }
+  h1 span { color: var(--accent); }
+  .stat { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .stat b { color: var(--text); font-weight: 600; }
+  button {
+    margin-left: auto; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit;
+  }
+  button:hover { border-color: var(--accent); }
+  main {
+    display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px;
+    padding: 16px 20px; max-width: 1200px; margin: 0 auto;
+  }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  #stage { padding: 12px; }
+  canvas { display: block; width: 100%; height: auto; border-radius: 8px; }
+  aside { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  aside h2 { margin: 0; padding: 12px 14px 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+  #agents { list-style: none; margin: 0; padding: 0 14px 12px; display: grid; gap: 6px; }
+  #agents li { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 12px; height: 12px; border-radius: 4px; flex: none; }
+  .pos { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #log { list-style: none; margin: 0; padding: 0 14px 12px; max-height: 340px; overflow: auto; font-size: 13px; }
+  #log li { padding: 5px 0; border-top: 1px solid var(--line); color: var(--muted); }
+  #log li:first-child { border-top: 0; }
+  #log b { color: var(--text); font-weight: 600; }
+  #log .t { font-variant-numeric: tabular-nums; margin-right: 6px; opacity: .7; }
+  #offline { display: none; color: #ff8a8a; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agent<span>ville</span></h1>
+  <span class="stat">Tick <b id="tick">0</b></span>
+  <span class="stat">Agenten <b id="count">0</b></span>
+  <span id="offline" class="stat">Server nicht erreichbar …</span>
+  <button id="pause" type="button">Pause</button>
+</header>
+<main>
+  <section class="card" id="stage"><canvas id="map" width="800" height="600"></canvas></section>
+  <aside>
+    <section class="card"><h2>Bewohner</h2><ul id="agents"></ul></section>
+    <section class="card"><h2>Ereignisse</h2><ul id="log"></ul></section>
+  </aside>
+</main>
+<script>
+(() => {
+  const canvas = document.getElementById("map");
+  const ctx = canvas.getContext("2d");
+  const POLL_MS = 400;
+  const palette = ["#ff7a7a", "#ffb86b", "#f5e06a", "#7ee2a8", "#6bd0ff", "#a995ff", "#ff8fd8", "#b5e86a"];
+  const colorOf = (name) => {
+    let h = 0;
+    for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return palette[h % palette.length];
+  };
+
+  // Smooth movement: remember where each agent was and glide to the new tile.
+  const shown = {};   // name -> {fromX, fromY, toX, toY, t0}
+  let state = null;
+  let duration = 600; // ms for one tile
+
+  function update(next) {
+    const now = performance.now();
+    for (const a of next.agents) {
+      const s = shown[a.name];
+      if (!s) {
+        shown[a.name] = { fromX: a.x, fromY: a.y, toX: a.x, toY: a.y, t0: now };
+      } else if (s.toX !== a.x || s.toY !== a.y) {
+        const p = progress(s, now);
+        s.fromX = s.fromX + (s.toX - s.fromX) * p;
+        s.fromY = s.fromY + (s.toY - s.fromY) * p;
+        s.toX = a.x; s.toY = a.y; s.t0 = now;
+      }
+    }
+    duration = Math.max(150, Math.min(700, next.tick_seconds * 1000 * 0.8));
+    state = next;
+  }
+
+  function progress(s, now) {
+    const t = Math.min(1, (now - s.t0) / duration);
+    return t * (2 - t); // ease-out
+  }
+
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function draw() {
+    requestAnimationFrame(draw);
+    if (!state) return;
+    const { width, height } = state;
+    const tile = 64; // internal resolution; the browser scales the canvas down crisply
+    if (canvas.width !== width * tile) canvas.width = width * tile;
+    if (canvas.height !== height * tile) canvas.height = height * tile;
+    const dark = !window.matchMedia("(prefers-color-scheme: light)").matches;
+    const g1 = dark ? "#2a4d3a" : "#9fd8b3";
+    const g2 = dark ? "#2e5441" : "#a9deba";
+
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++) {
+        ctx.fillStyle = (x + y) % 2 ? g1 : g2;
+        ctx.fillRect(x * tile, y * tile, tile, tile);
+      }
+
+    const now = performance.now();
+    ctx.textAlign = "center";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.textBaseline = "alphabetic";
+    for (const a of state.agents) {
+      const s = shown[a.name];
+      const p = progress(s, now);
+      const px = (s.fromX + (s.toX - s.fromX) * p) * tile;
+      const py = (s.fromY + (s.toY - s.fromY) * p) * tile;
+      const c = colorOf(a.name);
+      const u = tile / 40; // all sizes below were designed for a 40px tile
+      ctx.fillStyle = "rgba(0,0,0,.25)";
+      ctx.fillRect(px + 7 * u, py + tile - 9 * u, tile - 14 * u, 5 * u);
+      ctx.fillStyle = c;
+      ctx.beginPath();
+      ctx.roundRect(px + 6 * u, py + 6 * u, tile - 12 * u, tile - 12 * u, 7 * u);
+      ctx.fill();
+      ctx.fillStyle = "#14161c";
+      ctx.fillRect(px + 13 * u, py + 15 * u, 4 * u, 4 * u);
+      ctx.fillRect(px + tile - 17 * u, py + 15 * u, 4 * u, 4 * u);
+      ctx.lineWidth = 4 * u;
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = dark ? "rgba(20,22,28,.85)" : "rgba(255,255,255,.9)";
+      ctx.strokeText(a.name, px + tile / 2, py + 2 * u);
+      ctx.fillStyle = dark ? "#ffffff" : "#14161c";
+      ctx.fillText(a.name, px + tile / 2, py + 2 * u);
+    }
+  }
+
+  function renderSidebar(s) {
+    document.getElementById("tick").textContent = s.tick;
+    document.getElementById("count").textContent = s.agents.length;
+    document.getElementById("pause").textContent = s.paused ? "Weiter" : "Pause";
+    const list = document.getElementById("agents");
+    list.replaceChildren(...s.agents.map((a) => {
+      const li = document.createElement("li");
+      const dot = document.createElement("span");
+      dot.className = "dot"; dot.style.background = colorOf(a.name);
+      const name = document.createElement("span"); name.textContent = a.name;
+      const pos = document.createElement("span");
+      pos.className = "pos"; pos.textContent = `${a.x}, ${a.y}`;
+      li.append(dot, name, pos);
+      return li;
+    }));
+    const log = document.getElementById("log");
+    log.replaceChildren(...s.events.slice().reverse().map((e) => {
+      const li = document.createElement("li");
+      const t = document.createElement("span"); t.className = "t"; t.textContent = `[${e.tick}]`;
+      const who = document.createElement("b"); who.textContent = e.agent;
+      li.append(t, who, " " + e.text);
+      return li;
+    }));
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch("/api/state", { cache: "no-store" });
+      const s = await res.json();
+      update(s);
+      renderSidebar(s);
+      document.getElementById("offline").style.display = "none";
+    } catch (err) {
+      document.getElementById("offline").style.display = "inline";
+    }
+  }
+
+  document.getElementById("pause").addEventListener("click", async () => {
+    try { await fetch("/api/pause", { method: "POST" }); } catch (err) { /* ignore */ }
+    poll();
+  });
+
+  poll();
+  setInterval(poll, POLL_MS);
+  requestAnimationFrame(draw);
+})();
+</script>
+</body>
+</html>

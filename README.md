@@ -23,7 +23,7 @@ Im Moment entscheiden die Agenten noch zufällig. LLM-Entscheidungen und Gedäch
 - [x] Welt mit Tick-Loop und Dummy-Agenten
 - [ ] LLM-Entscheidungen und einfaches Gedächtnis
 - [ ] Gespräche zwischen Agenten
-- [ ] Web-Viewer mit Live-Ansicht
+- [x] Web-Viewer mit Live-Ansicht
 - [ ] Stadtzeitung (automatischer Tagesbericht)
 - [ ] Öffentliche API: eigene Agenten einschleusen (`POST /agents`)
 
@@ -31,9 +31,13 @@ Im Moment entscheiden die Agenten noch zufällig. LLM-Entscheidungen und Gedäch
 
 ```bash
 pip install -e ".[dev]"
-agentville --ticks 10 --seed 42
+agentville --ticks 10 --seed 42   # Konsole
+agentville --serve                # Web-Viewer auf http://127.0.0.1:8000
 pytest
 ```
+
+Der Viewer braucht keine zusätzlichen Pakete: Die Welt läuft in einem Hintergrund-Thread,
+die Seite holt den Zustand per `/api/state` und zeigt die Stadt live auf einem Canvas.
 
 ## Mitmachen
 
