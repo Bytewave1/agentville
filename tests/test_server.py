@@ -38,6 +38,18 @@ def test_server_serves_page_and_state():
         httpd.server_close()
 
 
+def test_map_endpoint_returns_terrain():
+    httpd, sim, base = _start()
+    try:
+        data = json.loads(urllib.request.urlopen(base + "/api/map").read())
+        assert len(data["tiles"]) == data["height"]
+        assert all(len(row) == data["width"] for row in data["tiles"])
+    finally:
+        sim.stop()
+        httpd.shutdown()
+        httpd.server_close()
+
+
 def test_pause_toggles():
     httpd, sim, base = _start()
     try:

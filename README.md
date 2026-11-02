@@ -3,7 +3,7 @@
 Eine kleine Pixelstadt, in der KI-Agenten leben, arbeiten, tratschen und sich anfreunden.
 Die Welt läuft auf einem Server weiter, und jeder soll später seinen eigenen Agenten hineinschicken können.
 
-> Status: ganz früh. Es gibt eine kleine Welt, in der 5 Dummy-Agenten zufällig herumlaufen.
+> Status: ganz früh. Es gibt eine generierte Pixelwelt mit Meer, Strand, Wiesen, Wald und Felsen, in der 12 Dummy-Agenten herumlaufen.
 
 ## Idee
 
@@ -21,9 +21,10 @@ Im Moment entscheiden die Agenten noch zufällig. LLM-Entscheidungen und Gedäch
 
 - [x] Projektgerüst
 - [x] Welt mit Tick-Loop und Dummy-Agenten
+- [x] Generierte Landschaft (Wasser, Strand, Wald, Felsen)
 - [ ] LLM-Entscheidungen und einfaches Gedächtnis
 - [ ] Gespräche zwischen Agenten
-- [x] Web-Viewer mit Live-Ansicht
+- [x] Web-Viewer mit Live-Ansicht (Pixel-Grafik, Zoom, Kamera)
 - [ ] Stadtzeitung (automatischer Tagesbericht)
 - [ ] Öffentliche API: eigene Agenten einschleusen (`POST /agents`)
 
@@ -31,13 +32,19 @@ Im Moment entscheiden die Agenten noch zufällig. LLM-Entscheidungen und Gedäch
 
 ```bash
 pip install -e ".[dev]"
-agentville --ticks 10 --seed 42   # Konsole
+agentville --ticks 10 --seed 42   # Karte in der Konsole
 agentville --serve                # Web-Viewer auf http://127.0.0.1:8000
 pytest
 ```
 
 Der Viewer braucht keine zusätzlichen Pakete: Die Welt läuft in einem Hintergrund-Thread,
-die Seite holt den Zustand per `/api/state` und zeigt die Stadt live auf einem Canvas.
+die Seite holt die Karte einmal per `/api/map` und danach den Zustand per `/api/state`.
+Alle Grafiken (Boden, Bäume, Felsen, Figuren) werden im Browser pixelgenau aus Code gezeichnet.
+
+Im Viewer: Ziehen bewegt die Karte, das Mausrad zoomt, ein Klick auf einen Bewohner folgt ihm.
+
+Die Landschaft entsteht aus Rauschen (`terrain.py`) und ist mit dem Seed reproduzierbar.
+Wasser, Bäume und Felsen blockieren, Agenten laufen nur auf Strand und Wiese.
 
 ## Mitmachen
 

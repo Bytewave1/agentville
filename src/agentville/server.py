@@ -66,6 +66,8 @@ def make_server(
             path = self.path.split("?", 1)[0]
             if path in ("/", "/index.html"):
                 self._send(200, _index_html(), "text/html; charset=utf-8")
+            elif path == "/api/map":
+                self._send(200, json.dumps(world.map_data()).encode(), "application/json")
             elif path == "/api/state":
                 body = json.dumps(sim.snapshot()).encode()
                 self._send(200, body, "application/json")

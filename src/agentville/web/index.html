@@ -23,32 +23,43 @@
   }
   header {
     display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+    padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
   }
   h1 { margin: 0; font-size: 18px; letter-spacing: .02em; }
   h1 span { color: var(--accent); }
   .stat { color: var(--muted); font-variant-numeric: tabular-nums; }
   .stat b { color: var(--text); font-weight: 600; }
+  .actions { margin-left: auto; display: flex; gap: 8px; }
   button {
-    margin-left: auto; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    padding: 7px 14px; border-radius: 8px; cursor: pointer;
     border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit;
   }
   button:hover { border-color: var(--accent); }
   main {
-    display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px;
-    padding: 16px 20px; max-width: 1200px; margin: 0 auto;
+    display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px;
+    padding: 16px 20px; max-width: 1500px; margin: 0 auto;
   }
-  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
-  #stage { padding: 12px; }
-  canvas { display: block; width: 100%; height: auto; border-radius: 8px; }
-  aside { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  #stage { position: relative; overflow: hidden; height: calc(100vh - 104px); min-height: 420px; background: #0e2a4d; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+  canvas.dragging { cursor: grabbing; }
+  .hint {
+    position: absolute; left: 12px; bottom: 10px; padding: 5px 10px; border-radius: 8px;
+    background: rgba(10, 14, 22, .6); color: #dfe6f3; font-size: 12px; pointer-events: none;
+  }
+  aside { display: flex; flex-direction: column; gap: 16px; min-width: 0; max-height: calc(100vh - 104px); }
+  aside .card { display: flex; flex-direction: column; min-height: 0; }
   aside h2 { margin: 0; padding: 12px 14px 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-  #agents { list-style: none; margin: 0; padding: 0 14px 12px; display: grid; gap: 6px; }
-  #agents li { display: flex; align-items: center; gap: 10px; }
-  .dot { width: 12px; height: 12px; border-radius: 4px; flex: none; }
-  .pos { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
-  #log { list-style: none; margin: 0; padding: 0 14px 12px; max-height: 340px; overflow: auto; font-size: 13px; }
+  #agents { list-style: none; margin: 0; padding: 0 8px 8px; display: grid; gap: 2px; overflow: auto; max-height: 300px; }
+  #agents li {
+    display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 8px; cursor: pointer;
+  }
+  #agents li:hover { background: var(--bg); }
+  #agents li.on { background: var(--bg); outline: 1px solid var(--accent); }
+  .dot { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+  .pos { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+  #log { list-style: none; margin: 0; padding: 0 14px 12px; overflow: auto; font-size: 13px; flex: 1; min-height: 120px; }
   #log li { padding: 5px 0; border-top: 1px solid var(--line); color: var(--muted); }
   #log li:first-child { border-top: 0; }
   #log b { color: var(--text); font-weight: 600; }
@@ -62,102 +73,517 @@
   <span class="stat">Tick <b id="tick">0</b></span>
   <span class="stat">Agenten <b id="count">0</b></span>
   <span id="offline" class="stat">Server nicht erreichbar …</span>
-  <button id="pause" type="button">Pause</button>
+  <div class="actions">
+    <button id="overview" type="button">Übersicht</button>
+    <button id="pause" type="button">Pause</button>
+  </div>
 </header>
 <main>
-  <section class="card" id="stage"><canvas id="map" width="800" height="600"></canvas></section>
+  <section class="card" id="stage">
+    <canvas id="map"></canvas>
+    <div class="hint">Ziehen: Karte bewegen · Mausrad: Zoom · Klick auf Bewohner: folgen</div>
+  </section>
   <aside>
     <section class="card"><h2>Bewohner</h2><ul id="agents"></ul></section>
-    <section class="card"><h2>Ereignisse</h2><ul id="log"></ul></section>
+    <section class="card" style="flex:1"><h2>Ereignisse</h2><ul id="log"></ul></section>
   </aside>
 </main>
 <script>
 (() => {
+  "use strict";
+  const T = 16; // art pixels per tile
   const canvas = document.getElementById("map");
+  const stage = document.getElementById("stage");
   const ctx = canvas.getContext("2d");
-  const POLL_MS = 400;
-  const palette = ["#ff7a7a", "#ffb86b", "#f5e06a", "#7ee2a8", "#6bd0ff", "#a995ff", "#ff8fd8", "#b5e86a"];
-  const colorOf = (name) => {
-    let h = 0;
-    for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-    return palette[h % palette.length];
+
+  // ---------------------------------------------------------------- helpers
+  function hash(x, y, s = 0) {
+    let h = (Math.imul(x | 0, 374761393) + Math.imul(y | 0, 668265263) + Math.imul(s | 0, 1442695041)) | 0;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    h ^= h >>> 16;
+    return (h >>> 0) / 4294967296;
+  }
+  const strHash = (str) => { let h = 7; for (const c of str) h = (Math.imul(h, 31) + c.charCodeAt(0)) | 0; return h >>> 0; };
+  const rgb = (hex) => [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+  const make = (w, h) => { const c = document.createElement("canvas"); c.width = w; c.height = h; return c; };
+
+  const PAL = {
+    grass:   ["#62b150", "#5aa84a", "#6cbc5b", "#4d9a40"].map(rgb),
+    floor:   ["#3f8a3f", "#3a8139", "#469144", "#2f7332"].map(rgb),
+    sand:    ["#e9d6a2", "#e2cd96", "#f1e2b6", "#d3bd82"].map(rgb),
+    shallow: ["#4fa8e2", "#47a0da", "#5db4ea", "#3f93cd"].map(rgb),
+    deep:    ["#2f6fba", "#2a66b0", "#3678c2", "#25599c"].map(rgb),
   };
+  const FOAM = ["#e6f6fd", "#bde4f5", "#8fcdea"].map(rgb);
+  const WET = ["#cbb77a", "#d8c58c"].map(rgb);
+  const MUD = ["#4b7d38", "#6e5a3a"].map(rgb);
+  const FLOWERS = ["#f5d84a", "#f4f4f0", "#e8574f", "#a78bfa"].map(rgb);
 
-  // Smooth movement: remember where each agent was and glide to the new tile.
-  const shown = {};   // name -> {fromX, fromY, toX, toY, t0}
+  const isWater = (t) => t === "~" || t === "w";
+  const palOf = (t) => (t === "~" ? PAL.deep : t === "w" ? PAL.shallow : t === "s" ? PAL.sand : t === "f" ? PAL.floor : PAL.grass);
+
+  function pick(pal, ax, ay) {
+    const v = hash(ax >> 2, ay >> 2, 7) * 0.6 + hash(ax >> 1, ay >> 1, 2) * 0.28 + hash(ax, ay, 1) * 0.12;
+    return v < 0.42 ? pal[0] : v < 0.60 ? pal[1] : v < 0.80 ? pal[2] : pal[3];
+  }
+
+  // ---------------------------------------------------------------- ground
+  // Pixel positions inside a tile along a given side: side 0=N 1=E 2=S 3=W.
+  function sidePixel(side, i, depth) {
+    return side === 0 ? [i, depth] : side === 1 ? [T - 1 - depth, i] : side === 2 ? [i, T - 1 - depth] : [depth, i];
+  }
+  const SIDES = [[0, -1], [1, 0], [0, 1], [-1, 0]];
+
+  function bakeGround(W, H, tiles) {
+    const cv = make(W * T, H * T);
+    const c = cv.getContext("2d");
+    const img = c.createImageData(W * T, H * T);
+    const d = img.data;
+    const stride = W * T;
+    const set = (ax, ay, col) => {
+      if (ax < 0 || ay < 0 || ax >= stride || ay >= H * T) return;
+      const i = (ay * stride + ax) * 4;
+      d[i] = col[0]; d[i + 1] = col[1]; d[i + 2] = col[2]; d[i + 3] = 255;
+    };
+    const at = (x, y) => (x < 0 || y < 0 || x >= W || y >= H ? null : tiles[y][x]);
+
+    for (let ty = 0; ty < H; ty++) {
+      for (let tx = 0; tx < W; tx++) {
+        const t = tiles[ty][tx];
+        const pal = palOf(t);
+        const x0 = tx * T, y0 = ty * T;
+
+        for (let py = 0; py < T; py++)
+          for (let px = 0; px < T; px++) set(x0 + px, y0 + py, pick(pal, x0 + px, y0 + py));
+
+        // Small decorations baked into the ground.
+        if (t === "g") {
+          for (let k = 0; k < 3; k++) {
+            if (hash(tx, ty, 30 + k) < 0.32) {
+              const ax = x0 + 1 + Math.floor(hash(tx, ty, 40 + k) * 14);
+              const ay = y0 + 2 + Math.floor(hash(tx, ty, 50 + k) * 13);
+              set(ax, ay, PAL.grass[3]); set(ax, ay - 1, PAL.grass[2]);
+            }
+          }
+          if (hash(tx, ty, 31) < 0.11) {
+            for (let k = 0; k < 1 + (hash(tx, ty, 33) < 0.4 ? 1 : 0); k++) {
+              const ax = x0 + 2 + Math.floor(hash(tx, ty, 60 + k) * 12);
+              const ay = y0 + 2 + Math.floor(hash(tx, ty, 70 + k) * 11);
+              set(ax, ay, FLOWERS[Math.floor(hash(tx, ty, 80 + k) * FLOWERS.length)]);
+              set(ax, ay + 1, PAL.grass[3]);
+            }
+          }
+        } else if (t === "s") {
+          if (hash(tx, ty, 32) < 0.14) {
+            const ax = x0 + 2 + Math.floor(hash(tx, ty, 61) * 12);
+            const ay = y0 + 2 + Math.floor(hash(tx, ty, 71) * 12);
+            set(ax, ay, [176, 160, 112]); set(ax + 1, ay, [200, 186, 140]);
+          }
+          if (hash(tx, ty, 34) < 0.035) {
+            set(x0 + 4 + Math.floor(hash(tx, ty, 62) * 8), y0 + 4 + Math.floor(hash(tx, ty, 72) * 8), [242, 184, 198]);
+          }
+        }
+
+        // Soft transitions towards the four neighbours.
+        for (let s = 0; s < 4; s++) {
+          const n = at(tx + SIDES[s][0], ty + SIDES[s][1]);
+          if (n === null || n === t) continue;
+          const vertical = s === 0 || s === 2;
+          for (let i = 0; i < T; i++) {
+            const g = vertical ? x0 + i : y0 + i;
+            const line = (vertical ? ty : tx) * 4 + s;
+            const r = hash(g, line, 11);
+            const r2 = hash(g, line, 12);
+            let depth = 0, mode = null;
+            if (isWater(t) && !isWater(n)) { depth = 1 + Math.floor(r * 3); mode = "foam"; }
+            else if (t === "w" && n === "~") { depth = Math.floor(r * 3); mode = "deep"; }
+            else if (t === "s" && isWater(n)) { depth = 1 + Math.floor(r * 2); mode = "wet"; }
+            else if (t === "s" && (n === "g" || n === "f" || n === "r")) { depth = Math.floor(r * 4); mode = n === "f" ? "floor" : "grass"; }
+            else if ((t === "g" || t === "f" || t === "r") && isWater(n)) { depth = 1 + (r > 0.6 ? 1 : 0); mode = "mud"; }
+            else if (t === "g" && n === "f") { depth = Math.floor(r * 3); mode = "floor"; }
+            for (let k = 0; k < depth; k++) {
+              const [px, py] = sidePixel(s, i, k);
+              const ax = x0 + px, ay = y0 + py;
+              let col;
+              if (mode === "foam") { if (k === depth - 1 && r2 > 0.55 && depth > 1) continue; col = FOAM[Math.min(k, 2)]; }
+              else if (mode === "deep") { if (r2 < 0.35) continue; col = pick(PAL.deep, ax, ay); }
+              else if (mode === "wet") col = WET[(k + (r2 > 0.5 ? 1 : 0)) % 2];
+              else if (mode === "mud") col = MUD[r2 > 0.7 ? 1 : 0];
+              else if (mode === "floor") { if (r2 < 0.3) continue; col = pick(PAL.floor, ax, ay); }
+              else col = pick(PAL.grass, ax, ay);
+              set(ax, ay, col);
+            }
+          }
+        }
+
+        // Foam in the corners where the shore turns.
+        if (isWater(t)) {
+          for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+            const diag = at(tx + dx, ty + dy), a = at(tx + dx, ty), b = at(tx, ty + dy);
+            if (diag && !isWater(diag) && a && isWater(a) && b && isWater(b)) {
+              const cx = dx < 0 ? 0 : T - 2, cy = dy < 0 ? 0 : T - 2;
+              for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) set(x0 + cx + i, y0 + cy + j, FOAM[i + j > 0 ? 1 : 0]);
+            }
+          }
+        }
+      }
+    }
+    c.putImageData(img, 0, 0);
+    return cv;
+  }
+
+  // ---------------------------------------------------------------- sprites
+  function pxCanvas(w, h, draw) {
+    const cv = make(w, h);
+    const g = cv.getContext("2d");
+    const px = (x, y, col) => { g.fillStyle = col; g.fillRect(x, y, 1, 1); };
+    draw(g, px);
+    return cv;
+  }
+
+  const PINE_COLORS = [
+    { edge: "#1d5530", light: ["#52ad55", "#44994a"], dark: ["#2f7f3c", "#287234"] },
+    { edge: "#1b4d3a", light: ["#4aa66a", "#3d9259"], dark: ["#2b7a50", "#246b46"] },
+    { edge: "#24572b", light: ["#62b04a", "#52a043"], dark: ["#3a8a38", "#307c32"] },
+  ];
+  function makePine(v) {
+    const C = PINE_COLORS[v % PINE_COLORS.length];
+    return pxCanvas(22, 30, (g, px) => {
+      g.fillStyle = "rgba(0,0,0,.22)"; g.fillRect(4, 26, 14, 3);
+      g.fillStyle = "#5b3f26"; g.fillRect(10, 22, 3, 6);
+      g.fillStyle = "#7a5636"; g.fillRect(10, 22, 1, 6);
+      const layers = [{ top: 1, hh: 9, hw: 4 }, { top: 7, hh: 9, hw: 6 }, { top: 13, hh: 10, hw: 8 }];
+      for (const L of layers) {
+        for (let r = 0; r < L.hh; r++) {
+          const half = Math.round(1 + (L.hw - 1) * (r / (L.hh - 1)));
+          for (let x = -half; x <= half; x++) {
+            let col;
+            if (x === -half || x === half || r === L.hh - 1) col = C.edge;
+            else if (x < -half * 0.15) col = C.light[r % 3 === 0 ? 0 : 1];
+            else col = C.dark[r % 3 === 0 ? 0 : 1];
+            px(11 + x, L.top + r, col);
+          }
+        }
+      }
+    });
+  }
+
+  const OAK_COLORS = [
+    ["#1d5a2c", "#2d7a35", "#3b933f", "#4fa94c", "#6cc25a"],
+    ["#1f5a35", "#2f7c45", "#3d9654", "#52ac62", "#72c677"],
+    ["#2a5a22", "#3d7d2e", "#52973a", "#68b04a", "#86c863"],
+  ];
+  function makeOak(v) {
+    const C = OAK_COLORS[v % OAK_COLORS.length];
+    return pxCanvas(24, 30, (g, px) => {
+      g.fillStyle = "rgba(0,0,0,.22)"; g.fillRect(5, 26, 14, 3);
+      g.fillStyle = "#6b4a2b"; g.fillRect(11, 19, 3, 8);
+      g.fillStyle = "#8a6238"; g.fillRect(11, 19, 1, 8);
+      for (let y = 0; y < 24; y++) {
+        for (let x = 0; x < 24; x++) {
+          const dx = x - 12, dy = (y - 12) * 1.05;
+          const d = Math.sqrt(dx * dx + dy * dy) + (hash(x, y, 90 + v) - 0.5) * 1.8;
+          if (d > 9.6) continue;
+          const light = -dx * 0.5 - dy * 0.7;
+          let col;
+          if (d > 8.4) col = C[0];
+          else if (light > 3) col = C[4];
+          else if (light > 0) col = C[3];
+          else if (light > -4) col = C[2];
+          else col = C[1];
+          const sp = hash(x, y, 91 + v);
+          if (d < 8.4 && sp > 0.9) col = C[Math.min(4, Math.max(1, (C.indexOf(col) + 1)))];
+          else if (d < 8.4 && sp < 0.07) col = C[Math.max(1, C.indexOf(col) - 1)];
+          px(x, y, col);
+        }
+      }
+    });
+  }
+
+  function makeBoulder(v) {
+    return pxCanvas(20, 16, (g, px) => {
+      g.fillStyle = "rgba(0,0,0,.22)"; g.fillRect(2, 13, 16, 3);
+      const rocks = [{ cx: 9, cy: 9, rx: 8, ry: 5.5 }, { cx: 14.5, cy: 10.5, rx: 4.5, ry: 3.5 }, { cx: 5, cy: 11, rx: 3.5, ry: 2.8 }];
+      const cols = ["#4f5562", "#6b7280", "#868d9b", "#a4abb8", "#c3c9d3"];
+      for (const R of rocks) {
+        for (let y = 0; y < 16; y++) for (let x = 0; x < 20; x++) {
+          const dx = (x - R.cx) / R.rx, dy = (y - R.cy) / R.ry;
+          const d = Math.sqrt(dx * dx + dy * dy) + (hash(x, y, 95 + v) - 0.5) * 0.18;
+          if (d > 1) continue;
+          const light = -dx * 0.6 - dy * 0.8;
+          let i = d > 0.82 ? 0 : light > 0.55 ? 4 : light > 0.1 ? 3 : light > -0.4 ? 2 : 1;
+          px(x, y, cols[i]);
+        }
+      }
+    });
+  }
+
+  function makeBush(v) {
+    return pxCanvas(12, 9, (g, px) => {
+      g.fillStyle = "rgba(0,0,0,.2)"; g.fillRect(1, 7, 10, 2);
+      const cols = ["#2a6a30", "#3a8a3c", "#4fa44a", "#6cbc5a"];
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 12; x++) {
+        const dx = (x - 5.5) / 5.6, dy = (y - 4.2) / 3.8;
+        const d = Math.sqrt(dx * dx + dy * dy) + (hash(x, y, 97 + v) - 0.5) * 0.25;
+        if (d > 1) continue;
+        const light = -dx * 0.4 - dy * 0.8;
+        px(x, y, d > 0.84 ? cols[0] : light > 0.3 ? cols[3] : light > -0.2 ? cols[2] : cols[1]);
+      }
+      if (v % 2 === 0) { px(3, 3, "#e8574f"); px(7, 4, "#f5d84a"); }
+    });
+  }
+
+  // Characters: 12x16 pixel maps. O outline, H hair, S skin, E eye, T shirt, P pants, B boots.
+  const TOP_DOWN = ["...OOOOOO...", "..OHHHHHHO..", ".OHHHHHHHHO.", ".OHHSSSSHHO.", ".OHSSSSSSHO.", ".OSSESSESSO.", ".OSSSSSSSSO.", "..OSSSSSSO..", "...OOTTOO...", "..OTTTTTTO..", ".OSOTTTTOSO.", ".OSOTTTTOSO."];
+  const TOP_UP   = ["...OOOOOO...", "..OHHHHHHO..", ".OHHHHHHHHO.", ".OHHHHHHHHO.", ".OHHHHHHHHO.", ".OHHHHHHHHO.", ".OHHHHHHHHO.", "..OHHHHHHO..", "...OOTTOO...", "..OTTTTTTO..", ".OSOTTTTOSO.", ".OSOTTTTOSO."];
+  const TOP_SIDE = ["...OOOOOO...", "..OHHHHHHO..", ".OHHHHHHHHO.", ".OHHHHHSSHO.", ".OHHHHSSSSO.", ".OHHHHSSESO.", ".OHHHHSSSSO.", "..OHHHSSSO..", "...OOTTOO...", "..OTTTTTO...", "..OTTTTSO...", "..OTTTTSO..."];
+  const LEGS_FRONT = [
+    ["..OTTTTTTO..", "...OPPPPO...", "...OPOOPO...", "...OBO.OBO.."],
+    ["..OTTTTTTO..", "...OPPPPO...", "...OBOOPO...", "....O..OBO.."],
+    ["..OTTTTTTO..", "...OPPPPO...", "...OPOOBO...", "...OBO..O..."],
+  ];
+  const LEGS_SIDE = [
+    ["..OTTTTTO...", "...OPPPO....", "...OPPPO....", "...OBBBO...."],
+    ["..OTTTTTO...", "...OPPPO....", "..OPPO.OPO..", "..OBBO.OBO.."],
+    ["..OTTTTTO...", "...OPPPO....", "...OPPPO....", "...OBBBO...."],
+  ];
+  for (const rows of [TOP_DOWN, TOP_UP, TOP_SIDE, ...LEGS_FRONT, ...LEGS_SIDE])
+    for (const r of rows) if (r.length !== 12) console.error("bad sprite row", r);
+
+  const SKINS = ["#f1c7a0", "#e0a878", "#c58c5c", "#8f5f3a", "#fbd9bd"];
+  const HAIRS = ["#3b2a1e", "#1e1e24", "#c99a4b", "#b5532b", "#e0b44a", "#5b6ee1", "#d96b2b", "#8a8f9b"];
+  const SHIRTS = ["#d9534f", "#e8863a", "#e2c13a", "#4caf6a", "#3c9bd9", "#7f6ae0", "#d65fb0", "#5fc4b4"];
+  const PANTS = ["#3b4a7a", "#4a3b2e", "#2f5a4a", "#5a2f4f", "#33363f"];
+  const spriteCache = {};
+  function charSprites(name) {
+    if (spriteCache[name]) return spriteCache[name];
+    const h = strHash(name);
+    const r = (i, n) => Math.floor(hash(h, i, 3) * n);
+    const col = { O: "#1c1c28", E: "#1c1c28", B: "#4a3426", H: HAIRS[r(1, HAIRS.length)], S: SKINS[r(2, SKINS.length)], T: SHIRTS[r(3, SHIRTS.length)], P: PANTS[r(4, PANTS.length)] };
+    const build = (top, legs) => {
+      const rows = top.concat(legs);
+      return pxCanvas(12, 16, (g) => {
+        rows.forEach((row, y) => {
+          for (let x = 0; x < 12; x++) {
+            const ch = row[x];
+            if (ch === ".") continue;
+            g.fillStyle = col[ch]; g.fillRect(x, y, 1, 1);
+          }
+        });
+      });
+    };
+    const out = {
+      down: LEGS_FRONT.map((l) => build(TOP_DOWN, l)),
+      up: LEGS_FRONT.map((l) => build(TOP_UP, l)),
+      side: LEGS_SIDE.map((l) => build(TOP_SIDE, l)),
+      color: col.T,
+    };
+    spriteCache[name] = out;
+    return out;
+  }
+
+  // ---------------------------------------------------------------- world data
+  let map = null;         // {W,H,tiles}
+  let ground = null;      // baked terrain canvas
+  let objects = [];       // depth-sorted trees, boulders, bushes
+  let sparkles = [];      // animated water glints
   let state = null;
-  let duration = 600; // ms for one tile
+  const actors = {};      // name -> animation state
+  let duration = 600;
 
-  function update(next) {
-    const now = performance.now();
-    for (const a of next.agents) {
-      const s = shown[a.name];
-      if (!s) {
-        shown[a.name] = { fromX: a.x, fromY: a.y, toX: a.x, toY: a.y, t0: now };
-      } else if (s.toX !== a.x || s.toY !== a.y) {
-        const p = progress(s, now);
-        s.fromX = s.fromX + (s.toX - s.fromX) * p;
-        s.fromY = s.fromY + (s.toY - s.fromY) * p;
-        s.toX = a.x; s.toY = a.y; s.t0 = now;
+  function buildWorld(data) {
+    const { width: W, height: H, tiles } = data;
+    map = { W, H, tiles };
+    ground = bakeGround(W, H, tiles);
+    const pines = [0, 1, 2].map(makePine), oaks = [0, 1, 2].map(makeOak);
+    const rocks = [0, 1, 2].map(makeBoulder), bushes = [0, 1, 2, 3].map(makeBush);
+    objects = []; sparkles = [];
+    for (let ty = 0; ty < H; ty++) {
+      for (let tx = 0; tx < W; tx++) {
+        const t = tiles[ty][tx];
+        const bx = tx * T + 8, by = ty * T + 15;
+        if (t === "f") {
+          const pine = hash(tx, ty, 5) < 0.55;
+          const v = Math.floor(hash(tx, ty, 6) * 3);
+          const spr = pine ? pines[v] : oaks[v];
+          const jx = Math.round((hash(tx, ty, 8) - 0.5) * 4), jy = Math.round((hash(tx, ty, 9) - 0.5) * 3);
+          const anchorX = pine ? 11 : 12;
+          objects.push({ spr, x: bx - anchorX + jx, y: by - 27 + jy, foot: by + jy });
+        } else if (t === "r" && hash(tx, ty, 7) < 0.8) {
+          const spr = rocks[Math.floor(hash(tx, ty, 6) * 3)];
+          const jx = Math.round((hash(tx, ty, 8) - 0.5) * 8), jy = Math.round((hash(tx, ty, 9) - 0.5) * 6);
+          objects.push({ spr, x: tx * T - 2 + jx, y: by - 14 + jy, foot: by + jy });
+        } else if (t === "g" && hash(tx, ty, 41) < 0.05) {
+          const spr = bushes[Math.floor(hash(tx, ty, 42) * 4)];
+          objects.push({ spr, x: tx * T + 2 + Math.floor(hash(tx, ty, 43) * 4), y: by - 8 - Math.floor(hash(tx, ty, 44) * 3), foot: by - 1 });
+        } else if (isWater(t) && hash(tx, ty, 21) < 0.55) {
+          sparkles.push({
+            x: tx * T + 2 + Math.floor(hash(tx, ty, 22) * 11),
+            y: ty * T + 2 + Math.floor(hash(tx, ty, 23) * 12),
+            phase: hash(tx, ty, 24) * Math.PI * 2,
+            speed: 0.8 + hash(tx, ty, 25) * 1.2,
+            tx, ty,
+          });
+        }
       }
     }
-    duration = Math.max(150, Math.min(700, next.tick_seconds * 1000 * 0.8));
-    state = next;
+    objects.sort((a, b) => a.foot - b.foot || a.x - b.x);
   }
 
-  function progress(s, now) {
-    const t = Math.min(1, (now - s.t0) / duration);
-    return t * (2 - t); // ease-out
+  // ---------------------------------------------------------------- camera
+  const view = { dpr: 1 };
+  const cam = { x: 0, y: 0, zd: 3 };   // zd = device pixels per art pixel (integer)
+  let follow = null;
+  let initialised = false;
+
+  function resize() {
+    const r = stage.getBoundingClientRect();
+    view.dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(r.width * view.dpr));
+    canvas.height = Math.max(1, Math.round(r.height * view.dpr));
+    clampCamera();
   }
+  const viewArt = () => ({ w: canvas.width / cam.zd, h: canvas.height / cam.zd });
 
-  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+  function clampCamera() {
+    if (!map) return;
+    const v = viewArt(), mw = map.W * T, mh = map.H * T;
+    cam.x = v.w >= mw ? (mw - v.w) / 2 : Math.max(0, Math.min(mw - v.w, cam.x));
+    cam.y = v.h >= mh ? (mh - v.h) / 2 : Math.max(0, Math.min(mh - v.h, cam.y));
+  }
+  function fitZoom() {
+    return Math.max(1, Math.floor(Math.min(canvas.width / (map.W * T), canvas.height / (map.H * T))));
+  }
+  function setZoom(zd, anchorX, anchorY) {
+    zd = Math.max(1, Math.min(16, zd));
+    if (zd === cam.zd) return;
+    const ax = anchorX ?? canvas.width / 2, ay = anchorY ?? canvas.height / 2;
+    const wx = cam.x + ax / cam.zd, wy = cam.y + ay / cam.zd;
+    cam.zd = zd;
+    cam.x = wx - ax / zd; cam.y = wy - ay / zd;
+    clampCamera();
+  }
+  function centerOn(ax, ay) {
+    const v = viewArt();
+    cam.x = ax - v.w / 2; cam.y = ay - v.h / 2;
+    clampCamera();
+  }
+  function actorCenter(a) { return [a.rx * T + 8, a.ry * T + 8]; }
 
-  function draw() {
-    requestAnimationFrame(draw);
-    if (!state) return;
-    const { width, height } = state;
-    const tile = 64; // internal resolution; the browser scales the canvas down crisply
-    if (canvas.width !== width * tile) canvas.width = width * tile;
-    if (canvas.height !== height * tile) canvas.height = height * tile;
-    const dark = !window.matchMedia("(prefers-color-scheme: light)").matches;
-    const g1 = dark ? "#2a4d3a" : "#9fd8b3";
-    const g2 = dark ? "#2e5441" : "#a9deba";
-
-    for (let y = 0; y < height; y++)
-      for (let x = 0; x < width; x++) {
-        ctx.fillStyle = (x + y) % 2 ? g1 : g2;
-        ctx.fillRect(x * tile, y * tile, tile, tile);
-      }
-
+  // ---------------------------------------------------------------- animation
+  function progress(a, now) {
+    const t = Math.min(1, (now - a.t0) / duration);
+    return t;
+  }
+  function updateActors(next) {
     const now = performance.now();
-    ctx.textAlign = "center";
-    ctx.font = "bold 18px system-ui, sans-serif";
-    ctx.textBaseline = "alphabetic";
-    for (const a of state.agents) {
-      const s = shown[a.name];
-      const p = progress(s, now);
-      const px = (s.fromX + (s.toX - s.fromX) * p) * tile;
-      const py = (s.fromY + (s.toY - s.fromY) * p) * tile;
-      const c = colorOf(a.name);
-      const u = tile / 40; // all sizes below were designed for a 40px tile
-      ctx.fillStyle = "rgba(0,0,0,.25)";
-      ctx.fillRect(px + 7 * u, py + tile - 9 * u, tile - 14 * u, 5 * u);
-      ctx.fillStyle = c;
-      ctx.beginPath();
-      ctx.roundRect(px + 6 * u, py + 6 * u, tile - 12 * u, tile - 12 * u, 7 * u);
-      ctx.fill();
-      ctx.fillStyle = "#14161c";
-      ctx.fillRect(px + 13 * u, py + 15 * u, 4 * u, 4 * u);
-      ctx.fillRect(px + tile - 17 * u, py + 15 * u, 4 * u, 4 * u);
-      ctx.lineWidth = 4 * u;
-      ctx.lineJoin = "round";
-      ctx.strokeStyle = dark ? "rgba(20,22,28,.85)" : "rgba(255,255,255,.9)";
-      ctx.strokeText(a.name, px + tile / 2, py + 2 * u);
-      ctx.fillStyle = dark ? "#ffffff" : "#14161c";
-      ctx.fillText(a.name, px + tile / 2, py + 2 * u);
+    for (const ag of next.agents) {
+      let a = actors[ag.name];
+      if (!a) {
+        a = actors[ag.name] = { fromX: ag.x, fromY: ag.y, toX: ag.x, toY: ag.y, t0: now - 9999, face: "down", flip: false, step: 0, rx: ag.x, ry: ag.y };
+      } else if (a.toX !== ag.x || a.toY !== ag.y) {
+        const p = progress(a, now);
+        a.fromX = a.fromX + (a.toX - a.fromX) * p;
+        a.fromY = a.fromY + (a.toY - a.fromY) * p;
+        const dx = ag.x - a.toX, dy = ag.y - a.toY;
+        if (dx !== 0) { a.face = "side"; a.flip = dx < 0; }
+        else if (dy < 0) a.face = "up";
+        else a.face = "down";
+        a.toX = ag.x; a.toY = ag.y; a.t0 = now; a.step ^= 1;
+      }
+    }
+  }
+  function tickActors(now) {
+    for (const name in actors) {
+      const a = actors[name];
+      const p = progress(a, now);
+      const e = p * (2 - p);
+      a.rx = a.fromX + (a.toX - a.fromX) * e;
+      a.ry = a.fromY + (a.toY - a.fromY) * e;
+      a.moving = p < 1 && (a.fromX !== a.toX || a.fromY !== a.toY);
+      a.p = p;
     }
   }
 
+  // ---------------------------------------------------------------- drawing
+  function drawActor(a, name) {
+    const sp = charSprites(name);
+    const pose = a.moving ? 1 + a.step : 0;
+    const frame = sp[a.face][pose];
+    const bob = a.moving && Math.floor(a.p * 4) % 2 === 1 ? -1 : 0;
+    const x = Math.round(a.rx * T) + 2, y = Math.round(a.ry * T) - 2 + bob;
+    ctx.fillStyle = "rgba(0,0,0,.28)";
+    ctx.fillRect(x + 2, y + 14 - bob, 8, 2);
+    if (a.face === "side" && a.flip) {
+      ctx.save(); ctx.translate(x + 12, y); ctx.scale(-1, 1); ctx.drawImage(frame, 0, 0); ctx.restore();
+    } else {
+      ctx.drawImage(frame, x, y);
+    }
+  }
+
+  function render(now) {
+    requestAnimationFrame(render);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#1b4f86";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (!map || !ground || !state) return;
+    tickActors(now);
+
+    if (follow && actors[follow]) {
+      const [ax, ay] = actorCenter(actors[follow]);
+      const v = viewArt();
+      cam.x += (ax - v.w / 2 - cam.x) * 0.12;
+      cam.y += (ay - v.h / 2 - cam.y) * 0.12;
+    }
+    clampCamera();
+
+    const zd = cam.zd;
+    ctx.imageSmoothingEnabled = false;
+    ctx.setTransform(zd, 0, 0, zd, -Math.round(cam.x * zd), -Math.round(cam.y * zd));
+    ctx.drawImage(ground, 0, 0);
+
+    const v = viewArt();
+    const x0 = cam.x - 32, x1 = cam.x + v.w + 32, y0 = cam.y - 40, y1 = cam.y + v.h + 40;
+
+    // Water glints.
+    const time = now / 1000;
+    for (const s of sparkles) {
+      const ax = s.x, ay = s.y;
+      if (ax < x0 || ax > x1 || ay < y0 || ay > y1) continue;
+      const k = Math.sin(time * s.speed + s.phase) - 0.55;
+      if (k <= 0) continue;
+      ctx.fillStyle = `rgba(235,248,255,${Math.min(0.85, k * 2)})`;
+      ctx.fillRect(ax, ay, 2, 1);
+    }
+
+    // Trees, rocks, bushes and agents, back to front.
+    const list = Object.keys(actors).map((n) => [n, actors[n]]).sort((p, q) => p[1].ry - q[1].ry);
+    let ai = 0;
+    const footOf = (a) => Math.round(a.ry * T) + 15;
+    for (const o of objects) {
+      while (ai < list.length && footOf(list[ai][1]) <= o.foot) { const [n, a] = list[ai++]; drawActor(a, n); }
+      if (o.x + 24 < x0 || o.x > x1 || o.y + 32 < y0 || o.y > y1) continue;
+      ctx.drawImage(o.spr, o.x, o.y);
+    }
+    while (ai < list.length) { const [n, a] = list[ai++]; drawActor(a, n); }
+
+    // Name labels in screen space.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const dpr = view.dpr;
+    ctx.font = `600 ${Math.round(12 * dpr)}px system-ui, sans-serif`;
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"; ctx.lineJoin = "round";
+    const showAll = zd >= 3 * dpr * 0.9;
+    for (const [name, a] of list) {
+      if (!showAll && follow !== name) continue;
+      const sx = (a.rx * T + 8 - cam.x) * zd, sy = (a.ry * T - 5 - cam.y) * zd;
+      if (sx < -80 || sy < -30 || sx > canvas.width + 80 || sy > canvas.height + 30) continue;
+      ctx.lineWidth = 4 * dpr; ctx.strokeStyle = "rgba(14,18,28,.85)"; ctx.strokeText(name, sx, sy);
+      ctx.fillStyle = follow === name ? "#7ee2a8" : "#ffffff"; ctx.fillText(name, sx, sy);
+    }
+  }
+
+  // ---------------------------------------------------------------- sidebar
+  const colorOf = (name) => charSprites(name).color;
   function renderSidebar(s) {
     document.getElementById("tick").textContent = s.tick;
     document.getElementById("count").textContent = s.agents.length;
@@ -165,11 +591,12 @@
     const list = document.getElementById("agents");
     list.replaceChildren(...s.agents.map((a) => {
       const li = document.createElement("li");
+      if (follow === a.name) li.className = "on";
+      li.addEventListener("click", () => { follow = follow === a.name ? null : a.name; if (follow && cam.zd < 3) setZoom(Math.round(3 * view.dpr)); renderSidebar(state); });
       const dot = document.createElement("span");
       dot.className = "dot"; dot.style.background = colorOf(a.name);
       const name = document.createElement("span"); name.textContent = a.name;
-      const pos = document.createElement("span");
-      pos.className = "pos"; pos.textContent = `${a.x}, ${a.y}`;
+      const pos = document.createElement("span"); pos.className = "pos"; pos.textContent = `${a.x}, ${a.y}`;
       li.append(dot, name, pos);
       return li;
     }));
@@ -183,26 +610,103 @@
     }));
   }
 
+  // ---------------------------------------------------------------- network
+  async function loadMap() {
+    try {
+      const res = await fetch("/api/map", { cache: "no-store" });
+      buildWorld(await res.json());
+      resize();
+      document.getElementById("offline").style.display = "none";
+    } catch (err) {
+      document.getElementById("offline").style.display = "inline";
+      setTimeout(loadMap, 1500);
+    }
+  }
   async function poll() {
     try {
       const res = await fetch("/api/state", { cache: "no-store" });
       const s = await res.json();
-      update(s);
+      duration = Math.max(150, Math.min(900, s.tick_seconds * 1000 * 0.85));
+      updateActors(s);
+      state = s;
       renderSidebar(s);
-      document.getElementById("offline").style.display = "none";
+      if (map && !initialised && s.agents.length) {
+        initialised = true;
+        cam.zd = Math.max(fitZoom(), Math.round(3 * view.dpr));
+        const cx = s.agents.reduce((n, a) => n + a.x, 0) / s.agents.length;
+        const cy = s.agents.reduce((n, a) => n + a.y, 0) / s.agents.length;
+        centerOn(cx * T + 8, cy * T + 8);
+      }
+      if (map) document.getElementById("offline").style.display = "none";
     } catch (err) {
       document.getElementById("offline").style.display = "inline";
     }
   }
 
+  // ---------------------------------------------------------------- input
+  let drag = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    canvas.setPointerCapture(e.pointerId);
+    drag = { x: e.clientX, y: e.clientY, moved: 0 };
+    canvas.classList.add("dragging");
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = (e.clientX - drag.x) * view.dpr, dy = (e.clientY - drag.y) * view.dpr;
+    drag.moved += Math.abs(dx) + Math.abs(dy);
+    drag.x = e.clientX; drag.y = e.clientY;
+    if (drag.moved > 6 * view.dpr) { follow = null; cam.x -= dx / cam.zd; cam.y -= dy / cam.zd; clampCamera(); }
+  });
+  canvas.addEventListener("pointerup", (e) => {
+    const wasClick = drag && drag.moved <= 6 * view.dpr;
+    drag = null;
+    canvas.classList.remove("dragging");
+    if (!wasClick || !state) return;
+    const r = canvas.getBoundingClientRect();
+    const wx = cam.x + ((e.clientX - r.left) * view.dpr) / cam.zd;
+    const wy = cam.y + ((e.clientY - r.top) * view.dpr) / cam.zd;
+    let hit = null;
+    for (const name in actors) {
+      const a = actors[name];
+      if (wx >= a.rx * T - 1 && wx <= a.rx * T + 15 && wy >= a.ry * T - 4 && wy <= a.ry * T + 16) hit = name;
+    }
+    follow = hit === follow ? null : hit;
+    renderSidebar(state);
+  });
+  let lastWheel = 0;
+  canvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const now = performance.now();
+    if (now - lastWheel < 70) return;
+    lastWheel = now;
+    const r = canvas.getBoundingClientRect();
+    const step = cam.zd >= 6 ? 2 : 1;
+    const target = cam.zd + (e.deltaY < 0 ? step : -step);
+    setZoom(Math.max(map ? fitZoom() : 1, target), (e.clientX - r.left) * view.dpr, (e.clientY - r.top) * view.dpr);
+  }, { passive: false });
+
+  document.getElementById("overview").addEventListener("click", () => {
+    if (!map) return;
+    follow = null;
+    cam.zd = fitZoom();
+    centerOn(map.W * T / 2, map.H * T / 2);
+    if (state) renderSidebar(state);
+  });
   document.getElementById("pause").addEventListener("click", async () => {
     try { await fetch("/api/pause", { method: "POST" }); } catch (err) { /* ignore */ }
     poll();
   });
+  window.addEventListener("resize", resize);
+  new ResizeObserver(resize).observe(stage);
 
+  // Test hook, handy for screenshots.
+  window.agentville = { cam, setZoom, centerOn, follow: (n) => { follow = n; }, get ready() { return !!(map && state && initialised); } };
+
+  resize();
+  loadMap();
   poll();
-  setInterval(poll, POLL_MS);
-  requestAnimationFrame(draw);
+  setInterval(poll, 400);
+  requestAnimationFrame(render);
 })();
 </script>
 </body>
