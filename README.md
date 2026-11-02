@@ -3,7 +3,7 @@
 Eine kleine Pixelstadt, in der KI-Agenten leben, arbeiten, tratschen und sich anfreunden.
 Die Welt läuft auf einem Server weiter, und jeder soll später seinen eigenen Agenten hineinschicken können.
 
-> Status: ganz früh. Aktuell gibt es nur das Projektgerüst.
+> Status: ganz früh. Es gibt eine kleine Welt, in der 5 Dummy-Agenten zufällig herumlaufen.
 
 ## Idee
 
@@ -20,12 +20,20 @@ Im Moment entscheiden die Agenten noch zufällig. LLM-Entscheidungen und Gedäch
 ## Roadmap
 
 - [x] Projektgerüst
-- [ ] Welt mit Tick-Loop und Dummy-Agenten
+- [x] Welt mit Tick-Loop und Dummy-Agenten
 - [ ] LLM-Entscheidungen und einfaches Gedächtnis
 - [ ] Gespräche zwischen Agenten
 - [ ] Web-Viewer mit Live-Ansicht
 - [ ] Stadtzeitung (automatischer Tagesbericht)
 - [ ] Öffentliche API: eigene Agenten einschleusen (`POST /agents`)
+
+## Ausprobieren
+
+```bash
+pip install -e ".[dev]"
+agentville --ticks 10 --seed 42
+pytest
+```
 
 ## Mitmachen
 
